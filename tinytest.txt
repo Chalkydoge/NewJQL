@@ -1,0 +1,10 @@
+insert 1 a
+insert 2 b
+select
+insert 3 c
+insert 4 c
+select
+insert 5 d
+insert 6 f
+select
+.exit
