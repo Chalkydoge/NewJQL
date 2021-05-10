@@ -1,0 +1,13 @@
+insert 1 aaaaaaaaaab
+insert 2 aaaaaaaaaac
+insert 3 aaaaaaaaaad
+insert 4 aaaaaaaaaae
+insert 5 aaaaaaaaaaf
+insert 6 aaaaaaaaaag
+insert 7 aaaaaaaaaah
+insert 8 aaaaaaaaaab
+select
+insert 9 aaaaaaaaaai
+insert 10 aaaaaaaaaaj
+select
+.exit
