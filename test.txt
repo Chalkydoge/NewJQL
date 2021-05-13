@@ -1,26 +1,21 @@
-insert 1 aaaaaaaaaab
-insert 2 aaaaaaaaaac
-insert 3 aaaaaaaaaad
-insert 4 aaaaaaaaaae
-insert 5 aaaaaaaaaaf
-insert 6 aaaaaaaaaag
-insert 7 aaaaaaaaaah
-insert 8 aaaaaaaaaai
-select
-insert 9 aaaaaaaaaaj
-insert 10 aaaaaaaaaak
-insert 11 aaaaaaaaaal
-insert 12 aaaaaaaaaam
-select
-insert 13 aaaaaaaaaab
-select
-insert 14 aaaaaaaaaac
-select
-insert 15 aaaaaaaaaan
-insert 16 aaaaaaaaaao
-insert 17 aaaaaaaaaap
-insert 18 aaaaaaaaaaq
-select
-insert 19 aaaaaaaaaar
+insert 1 a
+insert 2 b
+insert 3 c
+insert 4 d
+insert 5 e
+insert 6 f
+insert 7 g
+insert 8 h
+insert 9 i
+insert 10 j
+insert 11 k
+insert 12 l
+insert 13 m
+insert 14 n
+insert 15 o
+insert 16 p
+insert 17 q
+insert 18 r
+select e
 select
 .exit
