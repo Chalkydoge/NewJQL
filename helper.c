@@ -65,7 +65,9 @@ int main () {
 
             uint32_t num_cells = *((uint32_t*)(page + 6));
             printf("- Having %d Cells\n", num_cells);
-
+            
+            uint32_t next_leaf_id = *((uint32_t*)(page + 10));
+            printf("- Next Leaf's Page Id is: [%d]\n", next_leaf_id);
             for (int32_t i = 0; i < num_cells; ++i) {
                 void* start = page + 14 + i * 28;
                 printf("Key [%s]\t", (char*)(start));

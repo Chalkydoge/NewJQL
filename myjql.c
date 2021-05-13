@@ -459,6 +459,8 @@ const uint32_t INTERNAL_NODE_CELL_SIZE = INTERNAL_NODE_CHILD_SIZE + INTERNAL_NOD
 const uint32_t INTERNAL_NODE_SPACE_FOR_CELLS = PAGE_SIZE - INTERNAL_NODE_HEADER_SIZE;
 const uint32_t INTERNAL_NODE_MAX_CELLS = INTERNAL_NODE_SPACE_FOR_CELLS / INTERNAL_NODE_CELL_SIZE;
 const uint32_t INTERNAL_NODE_LEFT_SPLIT_COUNT = 1;
+const uint32_t INTERNAL_NODE_MIN_CELLS = 1; // TODO: MODIFY IT AFTER TESTING
+
 // const uint32_t INTERNAL_NODE_RIGHT_SPLIT_COUNT = 1;
 
 /* Leaf Node Fields Functions */
@@ -517,6 +519,46 @@ void* leaf_node_value (void* node, uint32_t cell_num) {
 // return leafnode's next leaf's page_id
 uint32_t* leaf_node_next_leaf(void* node) {
   return node + LEAF_NODE_NEXT_LEAF_SIZE_OFFSET;
+}
+
+/** @params: void* node
+ *  return: index of given key in the node, if contains several keys,
+ *          return the minimum index.
+ */ 
+uint32_t leaf_node_find_key_index (void* node, char* key) {
+  uint32_t min_index = 0;
+  uint32_t max_index = *leaf_node_num_cells(node);
+
+  while (min_index != max_index) {
+    uint32_t mid_index = (min_index + max_index) / 2;
+    char* key_at_mid_index = leaf_node_key(node, mid_index);
+    int cmp = strcmp(key, key_at_mid_index);
+    printf("%s %s\n", key, key_at_mid_index);
+
+    if (cmp == 0) {
+      int32_t test_index = mid_index;
+      while (test_index >= 0){
+        /* code */
+        int test_cmp = strcmp(key, leaf_node_key(node, test_index));
+        if (test_cmp) {
+          break;
+        }
+        else {
+          --test_index;
+        }
+      }
+      min_index = test_index + 1;
+      break;
+    }
+    else if (cmp > 0) {
+      // key is larger than mid_key
+      max_index = mid_index;
+    }
+    else {
+      min_index = mid_index + 1;
+    }
+  }
+  return min_index;
 }
 
 /*---------------------------------------------*/
@@ -1148,7 +1190,10 @@ void b_tree_insert() {
 /* 实现 叶子节点内部的关键值删除 */
 void leaf_node_delete (Cursor* cursor, char* keys_to_delete) {
   printf("Find key in Page [%d], cell num is [%d]\n", cursor->page_num, cursor->cell_num);
+  // 当前执行删除的叶子节点
   void* node = get_page(table->pager, cursor->page_num);
+  printf("Successfully fetched page with %d keys\n", *leaf_node_num_cells(node));
+  // 当前叶子节点拥有的键数
   uint32_t leaf_num_cells = *leaf_node_num_cells(node);
   if (leaf_num_cells > LEAF_NODE_MIN_NUM_CELLS) {
     printf("Could be deleted Immediately!\n");
@@ -1166,11 +1211,102 @@ void leaf_node_delete (Cursor* cursor, char* keys_to_delete) {
     printf("Delete Completed!\n");
   }
   else {
-    printf("A lot of work here!\n");
-    // 1. could borrow from right siblings
+    uint32_t sib_node_id = *leaf_node_next_leaf(node);
+    printf("Reached Here\n");
+    if (sib_node_id == 0) {
+      // no sibling and underflows! need to merge with other nodes
+      printf("Need to implement deletion on rightmost node!\n");
+      exit(EXIT_FAILURE);
+    }
+    else {
+      void* sib_node = get_page(table->pager, sib_node_id);
+      uint32_t num_cells_in_sib = *leaf_node_num_cells(sib_node);
 
+      // CASE1: 兄弟节点可以借出键
+      if (num_cells_in_sib >= LEAF_NODE_MIN_NUM_CELLS + 1) {
+        
+        uint32_t del_index = leaf_node_find_key_index(node, keys_to_delete);
+        printf("The del index would be: [%d]\n", del_index);
 
-    // 2. cannot
+        for (int32_t i = leaf_num_cells - 1; i > del_index; --i) {
+          void* dst = leaf_node_cell(node, i - 1);
+          void* src = leaf_node_cell(node, i);
+          memcpy(dst, src, LEAF_NODE_CELL_SIZE);
+        }
+
+        // append this to the end of cur leaf node & remove from sib
+        char key_to_replace[12]; // temporary buffer
+        memcpy(key_to_replace, leaf_node_key(sib_node, 0), LEAF_NODE_KEY_SIZE);
+        memcpy(leaf_node_cell(node, leaf_num_cells - 1), leaf_node_cell(sib_node, 0), LEAF_NODE_CELL_SIZE);
+
+        // change cell arrangements in sib node
+        int32_t sib_node_size = *leaf_node_num_cells(sib_node);
+        for (int32_t i = 0; i < sib_node_size - 1; ++i) {
+          memcpy(leaf_node_cell(sib_node, i), leaf_node_cell(sib_node, i + 1), LEAF_NODE_CELL_SIZE);
+        }
+        *leaf_node_num_cells(sib_node) = sib_node_size - 1;
+
+        // change key in parent node ?
+        uint32_t parent_node_id = *node_parent(node);
+        void* parent_node = get_page(table->pager, parent_node_id);
+        uint32_t num_pointers_in_parent = *internal_node_num_keys(parent_node);
+
+        uint32_t child_index = internal_node_find_child(parent_node, keys_to_delete);
+        printf("The Index of Key to the leaf node is [%d]\n", child_index);
+        memcpy(internal_node_key(parent_node, child_index), key_to_replace, INTERNAL_NODE_KEY_SIZE);
+
+        print_internal_node_info(parent_node, parent_node_id);
+        return;
+      }
+      else {
+        // CASE 2. 借不出键
+        printf("Need to implement merging of two node!\n"); 
+
+        // DELETE KEY FROM ORIGINAL NODE FIRST
+        uint32_t index = cursor->cell_num;
+        if (index < leaf_num_cells - 1) {
+          // not the end
+          for (int32_t i = index; i < leaf_num_cells - 1; ++i) {
+            void* dest = leaf_node_cell(node, i);
+            void* src = leaf_node_cell(node, i + 1);
+            memcpy(dest, src, LEAF_NODE_CELL_SIZE);
+          }
+        }
+        leaf_num_cells -= 1;
+        *leaf_node_num_cells(node) = leaf_num_cells;
+
+        // THEN MERGE WITH SIBLING
+        for (int32_t i = 0; i < num_cells_in_sib; ++i) {
+          memcpy(leaf_node_cell(node, leaf_num_cells + i), leaf_node_cell(sib_node, i), LEAF_NODE_CELL_SIZE);
+        }
+
+        // then sibling page will be freed
+        // free(sib_page);
+
+        // 修改(删除)父结点中的键
+        uint32_t parent_node_id = *node_parent(node);
+        void* parent_node = get_page(table->pager, parent_node_id);        
+        uint32_t child_index = internal_node_find_child(parent_node, keys_to_delete);
+        uint32_t num_keys_in_parent = *internal_node_num_keys(parent_node);
+
+        for (int32_t i = num_keys_in_parent - 1; i > child_index; --i) {
+          void* dst = internal_node_cell(parent_node, i - 1);
+          void* src = internal_node_cell(parent_node, i);
+          memcpy(dst, src, INTERNAL_NODE_CELL_SIZE);
+        }
+
+        uint32_t child_id = cursor->page_num;
+        *internal_node_child(parent_node, child_index) = child_id;
+
+        if (num_keys_in_parent >= INTERNAL_NODE_MIN_CELLS) {
+          return;
+        }
+        else {
+          // recursively delete from parents(internal nodes)
+        }
+      }
+    }
+
   }
 }
 
@@ -1180,7 +1316,7 @@ void b_tree_delete() {
   char* keys_to_delete = statement.row.b;
 
   Cursor* cursor = table_find(table, keys_to_delete);
-  // printf("[INFO] delete: %s\n", statement.row.b);
+  printf("[INFO] delete: %s\n", statement.row.b);
 
   if (cursor->end_of_table) {
     printf("Error! No such key in DB.\n");
