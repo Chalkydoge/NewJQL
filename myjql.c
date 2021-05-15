@@ -1189,6 +1189,8 @@ void b_tree_insert() {
 
 /* ------------------------------------------- */
 
+bool merge_or_redistribute (void* node, uint32_t node_id, char* key);
+
 /* 调整根节点的函数 */
 bool adjust_root (void* node, uint32_t node_id) {
   NodeType root_type = get_node_type(node);
@@ -1222,7 +1224,7 @@ bool adjust_root (void* node, uint32_t node_id) {
 
 /* 内部节点重新分配算法 */
 void internalnode_redistribute (void* node, void* sib_node, void* parent_node, uint32_t value_index) {
-
+  printf("Called Internal Node Redistribute!\n");
 }
 
 /* 叶子节点的重新分配算法函数 */
@@ -1231,6 +1233,8 @@ void leaf_redistribute (void* node, void* sib_node, void* parent_node, uint32_t 
   // redistribute: from sib_node to node!
   // node: 删除操作发生的叶子节点
   // sib_node: node的兄弟节点(一般为右结点, 除非删除发生在最右), 将其中一个键分配给node
+
+  printf("Called Leaf Node Redistribute!\n"); // 测试信息
 
   uint32_t next_id = *leaf_node_next_leaf(node);
   bool has_right_sib = false;
@@ -1263,7 +1267,46 @@ void leaf_redistribute (void* node, void* sib_node, void* parent_node, uint32_t 
 }
 
 
-bool merge_or_redistribute (void* node, uint32_t node_id, char* key);
+void internalnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t parent_id, char* key) {
+  printf("Called Internal Node Merge!\n"); // 测试信息
+
+  // first borrowing from parent node
+  uint32_t child_index_in_parent = internal_node_find_child(parent_page, key);
+  uint32_t cur_size = *internal_node_num_keys(cur_page);
+  uint32_t sib_size = *internal_node_num_keys(sib_page);
+  char key_to_borrow_buf[12];
+
+  memcpy(key_to_borrow_buf, internal_node_key(parent_page, child_index_in_parent), INTERNAL_NODE_KEY_SIZE);
+  printf("Borrowed Key [%s] from parent! Index is [%d]\n", key_to_borrow_buf, child_index_in_parent);
+  printf("Before borrowing from parent, cur_node size is [%d]\n", cur_size);
+  memcpy(internal_node_key(cur_page, cur_size), key_to_borrow_buf, INTERNAL_NODE_KEY_SIZE);
+
+  uint32_t num_keys_in_parent = *internal_node_num_keys(parent_page);
+  *internal_node_num_keys(parent_page) = num_keys_in_parent - 1;
+  cur_size += 1;
+  printf("After borrowing from parent, cur_node size is [%d]\n", cur_size);  
+  *internal_node_num_keys(cur_page) = sib_size + cur_size;
+
+  // then merging cur_page with sib_page
+  for (int32_t i = 0; i < sib_size; ++i) {
+    printf("OK Here\n");
+    memcpy(internal_node_cell(cur_page, cur_size + i), internal_node_cell(sib_page, i), INTERNAL_NODE_CELL_SIZE);
+  }
+  *internal_node_right_child(cur_page) = *internal_node_right_child(sib_page);
+  printf("OK Here\n");
+  // last, check parent_node, if is root, meaning that internal nodes are merged
+  // leaving only one root node
+  if (parent_id == 0) {
+    memcpy(parent_page, cur_page, PAGE_SIZE);
+    // free(cur_page);
+    printf("Changing RootNode!\n");
+  }
+  else {
+    // else, recursively check his parents 
+    merge_or_redistribute(parent_page, parent_id, key);
+  }
+}
+
 /* 合并操作: 将src对应的节点数据 全部移植到dst, 并且在父结点中修改相应的指针信息 */
 void leafnode_move_all_to(void* src, void* dst) {
   uint32_t num_cells_in_src = *leaf_node_num_cells(src);
@@ -1282,27 +1325,40 @@ void leafnode_move_all_to(void* src, void* dst) {
 
 /* 合并两个节点的算法 */
 void leafnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t parent_id, char* key) {
+  printf("Called Leaf Node Merge!\n"); // 测试信息
   leafnode_move_all_to(sib_page, cur_page);
   uint32_t key_index = internal_node_find_child(parent_page, key);
   uint32_t key_num = *internal_node_num_keys(parent_page);
-  
-  if (key_index < key_num) {
-    // 移动父结点中的关键码, 删除原先指向cur_page的键, 用后面的键覆盖(满足新的 <=关系)
-    for (uint32_t i = key_index; i < key_num; ++i) {
-      void* dst = internal_node_cell(parent_page, i);
-      void* src = internal_node_cell(parent_page, i + 1);
-      memcpy(dst, src, INTERNAL_NODE_CELL_SIZE);
-    }
-  }
-  else {
-    // key所在叶子页面为最大! 最右侧
-    // 用原先的倒数第二个孩子指针覆盖, 表示最大孩子的修改(合并)
-    *internal_node_right_child(parent_page) = *internal_node_child(parent_page, key_num - 1);
-  }
+
+  uint32_t cur_leaf_num_cells = *leaf_node_num_cells(cur_page);
+  char key_to_replace[12];
+  memcpy(key_to_replace, leaf_node_key(cur_page, cur_leaf_num_cells - 1), LEAF_NODE_KEY_SIZE);
+  printf("The key to replace is [%s]\n", key_to_replace);
+
+  // 只需要修改一下父结点中的键即可
+  memcpy(internal_node_key(parent_page, key_index), key_to_replace, INTERNAL_NODE_KEY_SIZE);
+
+  // if (key_index < key_num) {
+  //   // 移动父结点中的关键码, 删除原先指向cur_page的键, 用后面的键覆盖(满足新的 <=关系)
+  //   for (uint32_t i = key_index; i < key_num; ++i) {
+  //     void* dst = internal_node_cell(parent_page, i);
+  //     void* src = internal_node_cell(parent_page, i + 1);
+  //     memcpy(dst, src, INTERNAL_NODE_CELL_SIZE);
+  //   }
+  // }
+  // else {
+  //   // key所在叶子页面为最大! 最右侧
+  //   // 用原先的倒数第二个孩子指针覆盖, 表示最大孩子的修改(合并)
+  //   *internal_node_right_child(parent_page) = *internal_node_child(parent_page, key_num - 1);
+  // }
 
   // 修改父结点中键的数量
-  uint32_t num_keys_in_parent = *internal_node_num_keys(parent_page);
-  *internal_node_num_keys(parent_page) = num_keys_in_parent - 1;
+  // uint32_t num_keys_in_parent = *internal_node_num_keys(parent_page);
+  // *internal_node_key(parent_page, num_keys_in_parent - 1) = "d";
+  // *internal_node_num_keys(parent_page) = num_keys_in_parent - 1;
+
+  // TODOS: 还需要修改指针
+  print_internal_node_info(parent_page, parent_id);
 
   if (parent_id == 0) {
     // 父结点就是根节点, 而当前合并了两个叶子
@@ -1369,6 +1425,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
   uint32_t sib_node_id;
   void* sib_node;
   bool is_redistribute = false;
+  bool to_be_merge;
   uint32_t child_index = internal_node_find_child(parent_node, key);
 
   if (node_type == NODE_LEAF) {
@@ -1378,10 +1435,12 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     if (child_index == num_child_in_parent) {
       // rightmost leaf node
       sib_node_id = *internal_node_child(parent_node, num_child_in_parent - 1);
+      to_be_merge = true;
     }
     else {
       // not the rightmost, so direct next is th sibling
       sib_node_id = *leaf_node_next_leaf(node);
+      to_be_merge = false;
     }
     
     sib_node = get_page(table->pager, sib_node_id);
@@ -1397,9 +1456,11 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     uint32_t num_child_in_parent = *internal_node_num_keys(parent_node);
     if (cur_node_index_in_parent >= num_child_in_parent) {
       sib_node_id = *internal_node_right_child(parent_node);
+      to_be_merge = true;
     }
     else {
       sib_node_id = *internal_node_child(parent_node, cur_node_index_in_parent + 1);
+      to_be_merge = false;
     }
     sib_node = get_page(table->pager, sib_node_id);
   }
@@ -1414,14 +1475,13 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     return false;
   }
 
-  bool to_be_merge;
-  if (sib_node_id == 0) {
-    leafnode_merge(node, sib_node, parent_node, parent_id, key);
-    to_be_merge = true;
+  if (node_type == NODE_LEAF) {
+    leafnode_merge(sib_node, node, parent_node, parent_id, key);
+    return to_be_merge;
   }
   else {
-    leafnode_merge(sib_node, node, parent_node, parent_id, key);
-    to_be_merge = false;
+    internalnode_merge(sib_node, node, parent_node, parent_id, key);
+    return to_be_merge;
   }
   
   return to_be_merge;

@@ -3,7 +3,10 @@ insert 2 b
 insert 3 c
 insert 4 d
 insert 5 e
+insert 6 f
+insert 7 g
+insert 8 h
+insert 9 i
 select
-delete b
+delete i
 select
-.exit
