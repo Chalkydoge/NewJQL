@@ -10,3 +10,8 @@ insert 9 i
 select
 delete i
 select
+delete b
+select
+delete a
+select
+.exit
