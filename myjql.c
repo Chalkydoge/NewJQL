@@ -448,7 +448,7 @@ const uint32_t LEAF_NODE_SPACE_FOR_CELLS = PAGE_SIZE - LEAF_NODE_HEADER_SIZE;
 const uint32_t LEAF_NODE_MAX_CELLS = LEAF_NODE_SPACE_FOR_CELLS / LEAF_NODE_CELL_SIZE;
 const uint32_t LEAF_NODE_LEFT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) / 2;
 const uint32_t LEAF_NODE_RIGHT_SPLIT_COUNT = (LEAF_NODE_MAX_CELLS + 1) - LEAF_NODE_LEFT_SPLIT_COUNT;
-const uint32_t LEAF_NODE_MIN_CELLS = 1;
+const uint32_t LEAF_NODE_MIN_CELLS = LEAF_NODE_MAX_CELLS / 2;
 
 /* Internal Node Header Layout */
 const uint32_t INTERNAL_NODE_NUM_KEYS_SIZE = sizeof(uint32_t);
@@ -1456,7 +1456,6 @@ void leafnode_move_all_to(void* src, void* dst) {
 
 /* 合并两个叶子节点的算法 */
 void leafnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t parent_id, char* key, bool rightmost) {
-  // printf("Called Leaf Node Merge!\n"); // 测试信息
   // printf("LeafNode Merging Type: [%d]\n", rightmost);
 
   // 首先, 将节点合并
@@ -1471,11 +1470,15 @@ void leafnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t
   // 删除父结点中指向 被合并的页面(sib)的指针
   if (key_index < key_num - 1) { // 一个小改动: key_index == key_num - 1, 就已经代表是最右key了
     // 左侧&中间节点的情况
+
+    // 这里有问题!!! pointer[index]需要保留, 而被合并的右侧页面指针(pointer[index + 1]) 将会失效!!!
+    uint32_t child_reserve = *internal_node_child(parent_page, key_index);
     for (uint32_t i = key_index; i < key_num - 1; ++i) {
-      char* dst = internal_node_key(parent_page, i);
-      char* src = internal_node_key(parent_page, i + 1);
-      memcpy(dst, src, INTERNAL_NODE_KEY_SIZE);
+      void* dst = internal_node_cell(parent_page, i);
+      void* src = internal_node_cell(parent_page, i + 1);
+      memcpy(dst, src, INTERNAL_NODE_CELL_SIZE);
     }
+    *internal_node_child(parent_page, key_index) = child_reserve;
   }
   else {
     // 最右侧页面被合并到左侧, 需要移除最右指针
@@ -1491,8 +1494,6 @@ void leafnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t
 
   // 只需要修改一下父结点中的键即可
   *internal_node_num_keys(parent_page) = key_num - 1;
-
-  // print_internal_node_info(parent_page, parent_id);
 
   if (parent_id == 0) {
     // 父结点就是根节点, 而当前合并了两个叶子
@@ -1535,7 +1536,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
   switch (node_type) {
     case NODE_LEAF: {
       uint32_t num_cells_in_leaf = *leaf_node_num_cells(node);
-      if (num_cells_in_leaf >= LEAF_NODE_MIN_CELLS) {
+      if (num_cells_in_leaf >= LEAF_NODE_MAX_CELLS / 2) {
         return false;
       }
       break;
@@ -1582,7 +1583,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     sib_node = get_page(table->pager, sib_node_id);
     uint32_t sib_num_cells = *leaf_node_num_cells(sib_node);
     uint32_t cur_num_cells = *leaf_node_num_cells(node);
-    if (sib_num_cells + cur_num_cells >= LEAF_NODE_MAX_CELLS) {
+    if (sib_num_cells >= 1 + LEAF_NODE_MIN_CELLS) {
       is_redistribute = true;
       to_be_merge = false;
     }
@@ -1605,7 +1606,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     uint32_t sib_num_cells = *internal_node_num_keys(sib_node);
     uint32_t cur_num_cells = *internal_node_num_keys(node);
 
-    if (sib_num_cells + cur_num_cells >= INTERNAL_NODE_MAX_CELLS) {
+    if (sib_num_cells >= 1 + INTERNAL_NODE_MIN_CELLS) {
       is_redistribute = true;
       to_be_merge = false;
     }
