@@ -31,14 +31,26 @@ typedef enum {
 } InputResult;
 
 /* pager and table */
-
 const uint32_t PAGE_SIZE = 4096; // 4KB page
+
+typedef struct ListNode {
+  struct ListNode* prev;
+  struct ListNode* next;
+  uint32_t free_page_id;
+} ListNode_t;
+
+typedef struct FreeList {
+  ListNode_t* head;
+  ListNode_t* tail;
+  int32_t size;
+} FreeList_t;
 
 typedef struct {
   int file_descriptor;
   uint32_t file_length;
   uint32_t num_pages;
   void* pages[TABLE_MAX_PAGES];
+  FreeList_t* freelist;
 } Pager;
 
 typedef struct {
@@ -46,15 +58,73 @@ typedef struct {
   uint32_t root_page_num;
 } Table;
 
-typedef struct {
-  int free;
-} FreeList;
-
 Table* table; // global variable, entry of the whole table
+
+FreeList_t* init_freelist () {
+  FreeList_t* freelist = malloc(sizeof(FreeList_t));
+  freelist->head = malloc(sizeof(ListNode_t));
+  freelist->tail = malloc(sizeof(ListNode_t));
+
+  freelist->head->prev = NULL;
+  freelist->head->next = freelist->tail;
+  freelist->tail->prev = freelist->head;
+  freelist->tail->next = NULL;
+  freelist->size = 0;
+  return freelist;
+}
+
+bool is_empty (FreeList_t* freelist) {
+  return freelist->size == 0;
+}
+
+void push_back (FreeList_t* freelist, uint32_t free_id) {
+  ListNode_t* tail = freelist->tail;
+  ListNode_t* node = malloc(sizeof(ListNode_t));
+  node->free_page_id = free_id;
+  ListNode_t* prev = tail->prev;
+
+  node->next = tail;
+  node->prev = prev;
+  prev->next = node;
+  tail->prev = node;
+  freelist->size++;
+}
+
+void add_empty_page (uint32_t page_id) {
+  push_back(table->pager->freelist, page_id);  
+}
+
+uint32_t pop_front (FreeList_t* freelist) {
+  ListNode_t* node = freelist->head->next;
+  freelist->head->next = node->next;
+  node->next->prev = freelist->head;
+  
+  uint32_t free_id = node->free_page_id;
+  free(node);
+  freelist->size--;
+  return free_id;
+}
+
+void print_freelist (FreeList_t* freelist) {
+  ListNode_t* start = freelist->head->next;
+  while (start && start != freelist->tail) {
+    printf("Free Page Id %d\n", start->free_page_id);
+    start = start->next;
+  }
+}
+
+void free_freelist (FreeList_t* freelist) {
+  ListNode_t* p = freelist->head;
+  while (p) {
+    ListNode_t* q = p->next;
+    free(p);
+    p = q;
+  }
+}
 
 void* get_page(Pager* pager, uint32_t page_num) {
   if (page_num > TABLE_MAX_PAGES) {
-    printf("Tried to fetch page number out of bound.\n");
+    printf("Tried to fetch page number %d out of bound.\n", page_num);
     exit(EXIT_FAILURE);
   }
 
@@ -103,6 +173,7 @@ Pager* pager_open(const char* filename) {
   pager->file_descriptor = fd;
   pager->file_length = file_length;
   pager->num_pages = (file_length / PAGE_SIZE);
+  pager->freelist = init_freelist();
 
   if (file_length % PAGE_SIZE != 0) {
     printf("Db file is not a whole number of pages. Corrupt file.\n");
@@ -117,7 +188,14 @@ Pager* pager_open(const char* filename) {
 }
 
 uint32_t get_unused_page_num (Pager* pager) {
-  return pager->num_pages;
+  if (!is_empty(pager->freelist)) {
+    uint32_t ans = pop_front(pager->freelist); 
+    // printf("Reusing old page %d!\n", ans);
+    return ans;
+  }
+  else {
+    return pager->num_pages;
+  }
 }
 
 // open database and do preparations
@@ -165,6 +243,7 @@ void pager_flush(Pager* pager, uint32_t page_num) {
 // close the file
 void db_close(Table* table) {
   Pager* pager = table->pager;
+  // print_freelist(pager->freelist);
 
   for (uint32_t i = 0; i < pager->num_pages; ++i) {
     if (!pager->pages[i]) {
@@ -191,6 +270,7 @@ void db_close(Table* table) {
     }
   }
 
+  free_freelist(pager->freelist);
   free(pager);
   free(table);
 }
@@ -722,6 +802,8 @@ void create_new_root(Table* table, uint32_t right_child_page_num) {
   void* right_child = get_page(table->pager, right_child_page_num);
   uint32_t left_child_page_num = get_unused_page_num(table->pager);
   void* left_child = get_page(table->pager, left_child_page_num);
+  memset(left_child, 0, PAGE_SIZE);
+
   // printf("Left child's page_id is: %d\n", left_child_page_num);
 
   /* Left child has data copied from old root */
@@ -771,38 +853,32 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
     *node_parent(new_left_child_page) = table->root_page_num;
     for (int32_t i = 0; i < *internal_node_num_keys(new_left_child_page); ++i) {
       void* child_page = get_page(table->pager, *internal_node_child(new_left_child_page, i));
-
       // printf("Child id %d\n", *internal_node_child(new_left_child_page, i));
       *node_parent(child_page) = new_left_child_id;
     }
     void* rightmost_child_page = get_page(table->pager, *internal_node_right_child(new_left_child_page));
 
-    // printf("Rightmost Child id %d\n", *internal_node_right_child(new_left_child_page));
+    printf("Rightmost Child id %d\n", *internal_node_right_child(new_left_child_page));
     *node_parent(rightmost_child_page) = new_left_child_id;
     
     // 拿到右孩子页面
     void* new_right_child_page = get_page(table->pager, old_right_page_id);
     *node_parent(new_right_child_page) = table->root_page_num;
 
-    // printf("Left child page_id: %d, Right child page_id: %d\n", new_left_child_id, old_right_page_id);
-    // printf("OK, have inserted into parent: %s\n", key_to_liftup);
+    printf("Left child page_id: %d, Right child page_id: %d\n", new_left_child_id, old_right_page_id);
+    printf("OK, have inserted into parent: %s\n", key_to_liftup);
     return;
   }
   else {
     // 原先的节点并不是根节点
-    // printf("Splitting an internal node and lifting up key into parent!\n");
     void* old_left_page = get_page(table->pager, old_left_page_id);
     uint32_t parent_of_old_id = *node_parent(old_left_page);
     void* parent_of_old_page = get_page(table->pager, parent_of_old_id);
     uint32_t num_keys_in_parent = *internal_node_num_keys(parent_of_old_page);
-    // printf("Left child's Parent Id is %d\n", parent_of_old_id);
-    
-    // 找到它的父结点(无论是否是根), 观察父结点中空间是否足够
-    // <= INTERNAL_MAX_KEYS - 1, 意味着即使加入一个也不会溢出, 直接插入就可以了
-    // 如果足够, 则加入并更新
-    if (num_keys_in_parent <= 1) {
+
+    if (num_keys_in_parent <= INTERNAL_NODE_MAX_CELLS - 1) {
       uint32_t index = internal_node_find_child(parent_of_old_page, key_to_liftup);
-      printf("%s\'s Index will be: %d\n", key_to_liftup, index);
+      // printf("%s\'s Index will be: %d\n", key_to_liftup, index);
       uint32_t rightmost_id_in_parent = *internal_node_right_child(parent_of_old_page);
       void* rightmost_child = get_page(table->pager, rightmost_id_in_parent);
       // printf("Rightmost Child's Max Key is %s\n", get_node_max_key(rightmost_child));
@@ -844,23 +920,15 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
     }
     else {
       // 否则做分裂, 再递归调用
-      // printf("Parent Node is Also Full! Need to implement!!!!!\n");
       uint32_t key_to_liftup_index = internal_node_find_child(parent_of_old_page, key_to_liftup); // 之前页面溢出的key 在它父结点中对应的位置是什么
-      // printf("Index to be put will be: %d\n", key_to_liftup_index);
 
       // 特殊! 当前 已满的父结点是根节点的情况! 直接新建一个根, 并分裂
       if (parent_of_old_id == 0) {
-        // PARENT IS ROOT, AND ROOT IS FULL!
-        // printf("Need to split root after inserting: %s\n", key_to_liftup);
-        // printf("Splited Internal Left %d, Internal Right %d\n", old_left_page_id, old_right_page_id);
-        
         uint32_t new_left_part_id = get_unused_page_num(table->pager);
         void* new_left_part_root = get_page(table->pager, new_left_part_id);
         uint32_t new_right_part_id = get_unused_page_num(table->pager);
         void* new_right_part_root = get_page(table->pager, new_right_part_id);
 
-        // printf("New left is %d, New right is %d\n", new_left_part_id, new_right_part_id);
-        
         initialize_internal_node(new_left_part_root);
         initialize_internal_node(new_right_part_root);
         *internal_node_num_keys(parent_of_old_page) = num_keys_in_parent + 1; 
@@ -883,23 +951,21 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
           *internal_node_child(parent_of_old_page, key_to_liftup_index + 1) = old_right_page_id;    
         }
         
-        // printf("Newly updated root info!\n");
-        // print_internal_node_info(parent_of_old_page, parent_of_old_id);
-
         int temp = *internal_node_num_keys(parent_of_old_page);
-        int mid = temp / 2;
-        // printf("%d %d\n", temp, mid);
-
         *internal_node_num_keys(new_left_part_root) = (temp - 1) / 2;
         *internal_node_num_keys(new_right_part_root) = (temp - 1) - *internal_node_num_keys(new_left_part_root);
 
-        for (int i = 0; i < mid; ++i) {
+        uint32_t left_part_root_num_cells = *internal_node_num_keys(new_left_part_root);
+        uint32_t right_part_root_num_cells = *internal_node_num_keys(new_right_part_root);
+        int32_t mid = left_part_root_num_cells; 
+
+        for (int i = 0; i < left_part_root_num_cells; ++i) {
           memcpy(internal_node_cell(new_left_part_root, i), internal_node_cell(parent_of_old_page, i), INTERNAL_NODE_CELL_SIZE);
         }
-        *internal_node_right_child(new_left_part_root) = *internal_node_child(parent_of_old_page, mid);
+        *internal_node_right_child(new_left_part_root) = *internal_node_child(parent_of_old_page, left_part_root_num_cells);
 
-        for (int i = mid + 1; i < temp; ++i) {
-          memcpy(internal_node_cell(new_right_part_root, i - mid - 1), internal_node_cell(parent_of_old_page, i), INTERNAL_NODE_CELL_SIZE);
+        for (int i = 0; i < right_part_root_num_cells; ++i) {
+          memcpy(internal_node_cell(new_right_part_root, i), internal_node_cell(parent_of_old_page, i + left_part_root_num_cells + 1), INTERNAL_NODE_CELL_SIZE);
         }
         *internal_node_right_child(new_right_part_root) = *internal_node_right_child(parent_of_old_page);
 
@@ -917,7 +983,6 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
         rm = get_page(table->pager, *internal_node_right_child(new_right_part_root));
         *node_parent(rm) = new_right_part_id;
 
-
         initialize_internal_node(parent_of_old_page);
         set_node_root(parent_of_old_page, true);
         *internal_node_num_keys(parent_of_old_page) = 1; // actually is 1 + (rightmost child) 1 = 2
@@ -931,22 +996,15 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
 
         *node_parent(new_left_part_root) = parent_of_old_id;
         *node_parent(new_right_part_root) = parent_of_old_id;
-
-        // print_internal_node_info(parent_of_old_page, parent_of_old_id);
-        // print_internal_node_info(new_left_part_root, new_left_part_id);  
-        // print_internal_node_info(new_right_part_root, new_right_part_id);  
         return;
       }
 
       // 否则, 分裂内部的父结点, 并将分裂后的两个页面ID 和 新产生键传递给它的父结点
-      // print_internal_node_info(parent_of_old_page, parent_of_old_id);
-    
       uint32_t right_part_id = get_unused_page_num(table->pager); // 分裂之后的右半页面ID
       void* right_part_page = get_page(table->pager, right_part_id); // 分裂之后的右半页面
 
       *internal_node_num_keys(parent_of_old_page) = num_keys_in_parent + 1; 
 
-      // printf("Num keys in parent is: %d\n", num_keys_in_parent);
       // 先假装不会发生溢出, 选择合适的位置插入相关的key, 更新与之对应的子页面指针
       if (key_to_liftup_index >= num_keys_in_parent) {
         // 加入的key是最大的, 需要修改rightmost信息
@@ -966,17 +1024,16 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
         *internal_node_child(parent_of_old_page, key_to_liftup_index + 1) = old_right_page_id;    
       }
 
-      // 正确的摆放 OK
-      // print_internal_node_info(parent_of_old_page, parent_of_old_id);
-
       uint32_t mid_liftup_index = (num_keys_in_parent + 1) / 2; // 插入之间溢出键后, 父结点发生溢出, 相应产生的键是什么, 索引是什么
       char* key_to_liftup_by_old_parent = internal_node_key(parent_of_old_page, mid_liftup_index);
-
+  
       // 更新新分裂内部节点的键数量
       *internal_node_num_keys(right_part_page) = (num_keys_in_parent) / 2;
-      for (int32_t i = num_keys_in_parent; i > mid_liftup_index; --i) {
-        uint32_t index_in_node = i - mid_liftup_index - 1; // (因为我们已经新加入了一个关键码)
-        memcpy(internal_node_cell(right_part_page, index_in_node), internal_node_cell(parent_of_old_page, i), INTERNAL_NODE_CELL_SIZE);
+      int32_t right_part_size = *internal_node_num_keys(right_part_page);
+      int32_t left_part_size = num_keys_in_parent - right_part_size;
+
+      for (int32_t i = 0; i < right_part_size; ++i) {
+        memcpy(internal_node_cell(right_part_page, i), internal_node_cell(parent_of_old_page, left_part_size + i + 1), INTERNAL_NODE_CELL_SIZE);
       }
 
       // 更新子节点的指针信息
@@ -986,18 +1043,17 @@ void insert_into_parent(Table* table, uint32_t old_left_page_id, uint32_t old_ri
       *node_parent(right_page_rightmost_child) = right_part_id;
 
       // 其余的子页面指针M 让其指向父页面
-      for (int32_t i = 0; i < *internal_node_num_keys(right_part_page); ++i) {
+      for (int32_t i = 0; i < right_part_size; ++i) {
         // printf("Right child has key %s\n", internal_node_key(right_part_page, i));
         void* right_page_child = get_page(table->pager, *internal_node_child(right_part_page, i));
         *node_parent(right_page_child) = right_part_id;
       }
 
-      *internal_node_num_keys(parent_of_old_page) = (num_keys_in_parent) / 2;
-      // [0, ... mid - 1] [mid] [mid + 1, ..., all - 1]  => all = num_keys_in_parent
-      uint32_t curr_num_keys = *internal_node_num_keys(parent_of_old_page);
+      *internal_node_num_keys(parent_of_old_page) = left_part_size;
+      // 更新左侧部分的信息
       
-      for (int32_t i = 0; i < curr_num_keys; ++i) {
-        // printf("Left child has key %s\n", internal_node_key(parent_of_old_page, i));
+      for (int32_t i = 0; i < left_part_size; ++i) {
+        printf("Left child has key %s\n", internal_node_key(parent_of_old_page, i));
         void* left_page_child = get_page(table->pager, *internal_node_child(parent_of_old_page, i));
         *node_parent(left_page_child) = parent_of_old_id;
       }
@@ -1039,7 +1095,6 @@ void internal_node_insert (Table* table, uint32_t parent_page_id, uint32_t child
     *internal_node_child(parent, index) = child_page_id;
     memcpy(internal_node_key(parent, index), child_max_key, 12);
   }
-  // print_internal_node_info(child, child_page_id);
 
   // OVERFLOW IN INTERNAL NODES
   if (original_num_keys >= LEAF_NODE_MAX_CELLS - 1) { // a certain number
@@ -1049,21 +1104,23 @@ void internal_node_insert (Table* table, uint32_t parent_page_id, uint32_t child
 
     // split origin data into two pages
     // printf("Left child page id is %d, Right page id is %d\n", parent_page_id, new_internal_page_id);
-    uint32_t mid_index = (1 + original_num_keys) / 2;
+    int32_t mid_index = (1 + original_num_keys) / 2;
 
     // update 右孩子节点的指针信息 与 指针数量
-    *internal_node_num_keys(new_internal_node) = original_num_keys / 2;
+    int32_t left_child_num_keys = mid_index;
+    int32_t right_child_num_keys = original_num_keys - left_child_num_keys;
+    *internal_node_num_keys(new_internal_node) = right_child_num_keys;
+    *internal_node_num_keys(parent) = left_child_num_keys;
 
-    for (int32_t i = original_num_keys; i > mid_index; --i) {
-      uint32_t index_in_node = i - mid_index - 1; // 0, 1, 2, ..., org - 1, org(因为我们已经新加入了一个关键码)
-      memcpy(internal_node_cell(new_internal_node, index_in_node), internal_node_cell(parent, i), INTERNAL_NODE_CELL_SIZE);
+    for (int32_t i = 0; i < right_child_num_keys; ++i) {
+      memcpy(internal_node_cell(new_internal_node, i), internal_node_cell(parent, i + left_child_num_keys + 1), INTERNAL_NODE_CELL_SIZE);
     }
     
     *internal_node_right_child(new_internal_node) = *internal_node_right_child(parent);
     void* right_page_rightmost_child = get_page(table->pager, *internal_node_right_child(new_internal_node));
     *node_parent(right_page_rightmost_child) = new_internal_page_id;
 
-    for (int32_t i = 0; i < *internal_node_num_keys(new_internal_node); ++i) {
+    for (int32_t i = 0; i < right_child_num_keys; ++i) {
       // printf("Right child has key %s\n", internal_node_key(new_internal_node, i));
       void* right_page_child = get_page(table->pager, *internal_node_child(new_internal_node, i));
       *node_parent(right_page_child) = new_internal_page_id;
@@ -1075,12 +1132,8 @@ void internal_node_insert (Table* table, uint32_t parent_page_id, uint32_t child
     *node_parent(left_page_rightmost_child) = parent_page_id;
 
     char* key_to_liftup = internal_node_key(parent, mid_index);
-    // printf("Key to Liftup is [%s]\n", key_to_liftup);
-    *internal_node_num_keys(parent) = original_num_keys / 2;
-    uint32_t curr_num_keys = *internal_node_num_keys(parent);
     
-    for (int32_t i = 0; i < curr_num_keys; ++i) {
-      // printf("Left child has key %s\n", internal_node_key(parent, i));
+    for (int32_t i = 0; i < left_child_num_keys; ++i) {
       void* left_page_child = get_page(table->pager, *internal_node_child(parent, i));
       *node_parent(left_page_child) = parent_page_id;
     }
@@ -1292,8 +1345,10 @@ void internalnode_redistribute (void* cur_node, void* sib_node, void* parent_nod
     *internal_node_num_keys(sib_node) = sib_node_size - 1;
 
     // 第二步, 将父结点的键借给左孩子
-    cur_node_size = *internal_node_num_keys(cur_node);
-    *internal_node_num_keys(cur_node) = cur_node_size + 1;
+    cur_node_size = *internal_node_num_keys(cur_node) + 1;
+    // printf("Current Internal Node has %d keys\n", cur_node_size);
+
+    *internal_node_num_keys(cur_node) = cur_node_size;
     memcpy(internal_node_key(cur_node, cur_node_size - 1), key_from_parent, INTERNAL_NODE_KEY_SIZE);
 
     // 第三步, 将父结点对应的键值修改
@@ -1334,7 +1389,8 @@ void leaf_redistribute (void* node, void* sib_node, void* parent_node, uint32_t 
     *leaf_node_num_cells(sib_node) = sib_node_size - 1;
 
     // change key in parent node ?
-    // printf("The Index of Key in the leaf node is [%d]\n", value_index);
+    // printf("Key index to be replaced in the internal node is [%d], key [%s]\n", value_index, key_to_replace);
+
     memcpy(internal_node_key(parent_node, value_index), key_to_replace, INTERNAL_NODE_KEY_SIZE);
     return;
   }
@@ -1429,7 +1485,7 @@ void internalnode_merge (void* sib_page, void* cur_page, void* parent_page, uint
     // free(cur_page);
     void* rightmost_child = get_page(table->pager, *internal_node_right_child(parent_page));
     *node_parent(rightmost_child) = parent_id;
-    printf("Changing RootNode!\n");
+    // printf("Changing RootNode!\n");
   }
   else {
     // else, recursively check his parents 
@@ -1473,6 +1529,7 @@ void leafnode_merge (void* sib_page, void* cur_page, void* parent_page, uint32_t
 
     // 这里有问题!!! pointer[index]需要保留, 而被合并的右侧页面指针(pointer[index + 1]) 将会失效!!!
     uint32_t child_reserve = *internal_node_child(parent_page, key_index);
+    // printf("Child is [%d]\n", child_reserve);
     for (uint32_t i = key_index; i < key_num - 1; ++i) {
       void* dst = internal_node_cell(parent_page, i);
       void* src = internal_node_cell(parent_page, i + 1);
@@ -1564,6 +1621,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
   bool to_be_merge;
   bool rightmost;
   uint32_t child_index = internal_node_find_child(parent_node, key);
+  // printf("Child index is %d\n", child_index);
 
   if (node_type == NODE_LEAF) {
     // 当前待合并/重新分配的节点是叶子节点   
@@ -1612,6 +1670,7 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
     }
   }
 
+
   if (is_redistribute) {
     if (node_type == NODE_LEAF) {
       leaf_redistribute(node, sib_node, parent_node, child_index);
@@ -1625,11 +1684,13 @@ bool merge_or_redistribute (void* node, uint32_t node_id, char* key) {
   if (node_type == NODE_LEAF) {
     // printf("Leaf Node Merging! Sib is [%d], and Cur is [%d]\n", sib_node_id, node_id);
     leafnode_merge(sib_node, node, parent_node, parent_id, key, rightmost);
+    add_empty_page(sib_node_id);
     return true;
   }
   else {
     // printf("Internal Node Merging! Sib is [%d], and Cur is [%d]\n", sib_node_id, node_id);
     internalnode_merge(sib_node, node, parent_node, parent_id, key, rightmost);
+    add_empty_page(sib_node_id);
     return true;
   }
   
