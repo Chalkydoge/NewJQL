@@ -1,5 +1,5 @@
-myjql : myjql.c
-	gcc -o myjql.o myjql.c
-
+myjql : myjql.c helper.c
+	gcc -o myjql myjql.c
+	gcc -o help helper.c
 clean :
 	rm -rf *.o

@@ -9,7 +9,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-const uint32_t PAGE_SIZE = 4096;
+const uint32_t PAGE_SIZE = 64;
 
 int main () {
     int fd = open("myjql.db", O_RDWR | O_CREAT, // Read/Write mode, Create file if doen't exist
@@ -70,7 +70,7 @@ int main () {
             uint32_t next_leaf_id = *((uint32_t*)(page + 10));
             printf("- Next Leaf's Page Id is: [%d]\n", next_leaf_id);
             for (int32_t i = 0; i < num_cells; ++i) {
-                void* start = (void*)(page + 14 + i * 28);
+                void* start = (void*)(page + 14 + i * 16);
                 printf("Key [%s]\t", (char*)(start));
                 printf("Value [%d]\n", *((int*)(start + 12)));
             }
