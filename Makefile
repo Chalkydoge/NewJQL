@@ -2,4 +2,4 @@ myjql : myjql.c helper.c
 	gcc -o myjql myjql.c
 	gcc -o help helper.c
 clean :
-	rm -rf *.o
+	rm -rf myjql help

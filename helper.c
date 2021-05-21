@@ -9,7 +9,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-const uint32_t PAGE_SIZE = 128;
+const uint32_t PAGE_SIZE = 4096;
 
 int main () {
     int fd = open("myjql.db", O_RDWR | O_CREAT, // Read/Write mode, Create file if doen't exist

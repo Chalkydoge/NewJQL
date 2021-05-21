@@ -3998,4 +3998,26 @@ select aaaaaaaaana
 select aaaaaaaader
 select aaaaaaaaabv
 select aaaaaaaaaxn
+delete aaaaaaaaaab
+delete aaaaaaaaaac
+delete aaaaaaaades
+delete aaaaaaaadet
+delete aaaaaaaaaad
+delete aaaaaaaaaae
+delete aaaaaaaadeu
+delete aaaaaaaaaaf
+delete aaaaaaaadev
+delete aaaaaaaaaag
+delete aaaaaaaaaah
+delete aaaaaaaadew
+select aaaaaaaaact
+select aaaaaaaabkl
+delete aaaaaaaaaai
+delete aaaaaaaaaaj
+delete aaaaaaaadex
+delete aaaaaaaaaak
+delete aaaaaaaaaal
+delete aaaaaaaaaam
+select aaaaaaaabuw
+select
 .exit
